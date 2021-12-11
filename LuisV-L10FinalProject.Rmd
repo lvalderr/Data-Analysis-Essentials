@@ -1,0 +1,604 @@
+---
+title: "Final Project"
+author: "Luis Valderrama"
+date: "12/11/2021"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+time: 10:30 am
+---
+
+# Assignment Instructions
+
+Create a multivariate prediction model and perform data analyis of a dataset you choose. This can be either a linear regression, or a classification. 
+This includes:
+
+* 1 point - All code blocks run without error. 
+* 2 points - Create 2 charts exploring the data with respect to the prediction variable (label)
+* 2 points - Create a hypothesis and perform a t.test to reject or fail to reject that hypothesis
+* 1 point - Split the data into training set and testing set for each model and wrangle the data as desired
+* 3 points - Create 2 prediction models of your chosen type (regression | classification), with at least one multivariate model  including visualizing the results of each model
+* 2 points - Compare the performance of your models
+* 1 point - Include a written analysis of your prediction referencing using data to support your conclusions.
+
+The above is what is required to achieve full credit for the assignment. You are welcome and encouraged to go above and beyond these requirements, just be sure these requirements are fully met first. 
+
+## R Features
+* You are welcome to use any feature covered in this class
+* You are welcome to load any library that is already installed in the virtual environment, but you cannot install new packages. You can also reference installed packages by library name::function_name to avoid naming conflicts
+* Use set.seed() as necessary to ensure reproducability as the instructor / TA will run the code to grade it
+* Ensure your code runs to completion within 60 minutes from start to finish. You may save and load pre-trained models with your instructor's prior permission if you feel you need to exceed this time limit.
+
+## Dataset
+* Your choice. Be sure the data lends itself to supervised learning, with a label and is appropriate for either regression or classification. Remove any personally identifiable data. 
+* Suggested data source [UCI Machine Learning Repository](http://mlr.cs.umass.edu/ml/datasets.html) and look for Data Types == Multivariate and Default Task in (Classification, Regression)
+* The data would need to be uploaded to the virtual environment such that the instructor or TA can run the code without error. 
+
+```{r Libraries and Seed}
+# Load libraries
+# Load any additional libraries. No install.package()
+library(lubridate)
+library(tidyverse)
+
+# set.seed for reproducible results
+set.seed(1222) 
+```
+
+# Load and explore data structure
+The objective of this exercise is to build a model to predict house prices using the house price data set. The data set contains the prices and features of 21,613 houses. 
+
+**Note:** This data set is provided in the Final Project folder and its named kc_house_data.csv. 
+
+After high level review of the attributes and data types displayed below. Along with the label (price), there appear to be several features, most useful.
+
+```{r High Level View of the House Price Data}
+# High level view of the data
+read_csv ("kc_house_data.csv")
+```
+
+# Data processing
+As a first step I read the data from the raw .csv file. The function below reads and prepares the data for exploration analysis and establishing a data.frame. Required data munging:
+1.	The .csv file is read, using coding for potential missing values in the raw file.
+2.	For consistency purposes, replace the _ character in the column names with ..
+3.	Remove four unnecessary columns (lat, long, sqft.living15, sqft.lot15) as they provide little to no value, and cases with potential missing data from the data frame using a dpyr verb pipeline. These verbs are chained by the %>% operator.
+
+The established data frame is named house.price and consists of 17 attributes that are relevant for this analysis and the population size is 21,613 (which matches the original dataset).
+
+```{r Ingensting the raw .csv file and establish the data.frame}
+# Create a function to read in the data
+read.house = function(file = "kc_house_data.csv"){
+  
+## Read the raw csv file
+house.price = read_csv (file, col_names = TRUE, na = c('?', '', NA))
+   
+# remove the '-' character from the column names
+names(house.price) = str_replace_all(names(house.price), '_', '.')
+    
+# Remove unwanted columns: lat, long
+# Remove the rows with missing values
+    house.price <- house.price %>% 
+                   select (-lat, -long, -sqft.living15, -sqft.lot15) %>% 
+                   filter( complete.cases (.))
+# Return the data frame
+    house.price
+}
+
+# Call the read.house() function and
+# Store the results on house.price
+house.price = read.house ()
+
+# Explore the result
+glimpse(house.price)
+```
+
+# Data Transformation
+The two relevant features, ‘view’ and ‘waterfront’ have various sub-classifications that may not be relevant to this analysis as we are not narrowing the data down into special details such as waterfront and/or view scale. Instead, I want to know if the house has view and/or waterfront feature YES/NO. 
+
+```{r Data Transformation}
+# Transforming the 'waterfront' attribute to: 0 = "no_waterfront", else "yes_waterfront"
+house.price <- house.price %>% mutate(waterfront_yes_no = if_else(waterfront == 0, "no", "yes")) %>% mutate_if(is.character, as.factor)
+                               
+# Transforming the 'view' attribute to: 0 = "no_view", else "yes_view"
+house.price <- house.price %>% mutate(view_yes_no = if_else(view == 0, "no", "yes")) %>% mutate_if(is.character, as.factor)
+
+house.price <- house.price %>% mutate(view_TRUE_FALSE = if_else(view_yes_no == "yes", TRUE, FALSE) %>% as.factor())
+# Review changes
+house.price %>% glimpse()
+
+# Add log and square root columns in the form of column_name.log and column_name.sqrt
+# for the following: engine.size, city.mpg
+# Update the existing data frame with the 4 new columns
+house.price = house.price %>% mutate (price.log = log (price))
+```
+
+# Explore prediction variable
+As mentioned above I have identified the Label to be the ‘Price’ of houses. There are many attributes in this dataset to which can serve as prediction variables, and the prediction model can be very complex and/or there could be many potential prediction models. For my analysis, the prediction models are segmented based on:
+
+1.	House Geographical Feature = zip code
+2.	House Basic Features = bedrooms, bathrooms, sqft of living space, lot
+3.	House Age/Condition Features = grade, built year, renovated year
+4.	House Special Features = view, waterfront
+
+## Exploration Charts Group 
+The function code below plots the histogram and density estimate for the feature specified on each exploration chart to follow.
+
+```{r Data Exploration Chart Functions}
+# Creating a function plot.hist to plot
+# a histogram and a density plot
+plot.hists = function(col, house.price, bins = 20){
+  require(ggplot2)
+  p1 = ggplot(house.price, aes_string(col)) + 
+       geom_histogram (aes(y = ..density..), bins = bins, 
+                       alpha = 0.3, color = 'blue') +
+       geom_density (size = 1) +
+       xlab(paste('Value of ', col)) +
+       ggtitle(paste('Histogram and density function \n for', col))
+       print(p1)
+}
+
+# Create a list of columns of interest
+cols.geographical=c('price', 'zipcode')
+cols.basicfeatures=c('price', 'bedrooms', 'bathrooms', 'sqft.living', 'sqft.lot', 'sqft.basement')
+cols.agecondition=c('price', 'floors', 'grade', 'yr.built', 'yr.renovated')
+cols.specialfeatures=c('price', 'waterfront', 'view')
+
+# Creating a plotting function for points and a trend line
+# Set y to price
+plot.feature = function(col, house.price){
+    p1 = ggplot(house.price, aes_string(x = col, y = 'price')) + 
+            geom_point () + 
+            geom_smooth(size = 1, color = 'red') + 
+            xlab(col) + ylab('Price') +
+            ggtitle(paste('Relationship between ', col, ' and price'))
+        
+  
+    # Print the plot
+    p1 %>% print()
+}
+# Create a list of columns of interest
+cols.geographical=c('zipcode')
+cols.basicfeatures=c('bedrooms', 'bathrooms', 'sqft.living', 'sqft.lot', 'sqft.basement')
+cols.agecondition=c('floors', 'grade', 'yr.built', 'yr.renovated')
+cols.specialfeatures=c('waterfront', 'view')
+```
+
+## Chart 1.1
+The first exploration is to look at the distribution of the label and geographical feature. As it is commonly known, using geographical feature as a predictor for house pricing would be considered relevant and an important feature. However, the data set we are using in our analysis is limited as it presents the zip code as the primary geographical identifier, which is very granular and broad, and difficult to aggregate it into meaningful attributes such as states, county, city without having major data transformation. Therefore, I consider that using zip code as the sole feature would not result in meaningful values. Although, the zip code should be considered as a feature.
+
+```{r Data Exploration Visual 1.1 Geographical Feature}
+# Loop through each column and call the plot function
+# 1.1 Price in relation to geographical feature
+invisible(lapply(cols.geographical,plot.hists, house.price))
+
+# Loop through each column and call the plot function
+invisible(lapply(cols.geographical, plot.feature, house.price))
+```
+
+## Chart 1.2
+The second exploration is to look at the distribution of the label and basic features. The chart reveals promising house price features such as square footage of living space, lot size, and basement as well as number of bathrooms and bedrooms. These features are common in most if not all houses and it is known that they can influence the house price. I acknowledge that not all houses have basements and square footage may be difficult to classify.
+
+```{r Data Exploration Visual 1.2 - Basic Features}
+# Loop through each column and call the plot function
+# 1.2 Price in relation to house basic features
+invisible(lapply(cols.basicfeatures,plot.hists, house.price))
+
+# Loop through each column and call the plot function
+invisible(lapply(cols.basicfeatures, plot.feature, house.price))
+```
+
+## Chart 1.3
+The third exploration is to look at the distribution of the label and age/condition features. Another set of features influencing the house price are year the house was built and/or renovated as well as built grade.
+
+```{r Data Exploration Visual 1.3 - Age and Condition Features}
+# Loop through each column and call the plot function
+# 1.3 Price in relation to house age and condition
+invisible(lapply(cols.agecondition,plot.hists, house.price))
+
+# Loop through each column and call the plot function
+invisible(lapply(cols.agecondition, plot.feature, house.price))
+```
+
+## Chart 1.4
+The fourth exploration is to look at the distribution of the label and special features. This chart quantifies and confirms that special features such as having a house with a view, or waterfront may be unique, desirable and will influence the house price. These special features may be in some cases almost impossible to change while the structure of the house can be reasonably renovated or upgraded to the buyers’ specifications. This data set provides various levels of waterfront and views which can add complexity to my analysis. To reduce the complexity of the analysis I have limited the view/waterfront features to a simple yes/no presented in the violin plots below. The special features present good potential for a price prediction alternative.
+
+```{r Data Exploration Visual 1.4 - Special Features}
+# Loop through each column and call the plot function
+# 1.4 Price in relation to house special features
+invisible(lapply(cols.specialfeatures,plot.hists, house.price))
+
+# Loop through each column and call the plot function
+invisible(lapply(cols.specialfeatures, plot.feature, house.price))
+
+# Houses with a view Yes or No
+ggplot(house.price, aes(view_yes_no, price)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75),
+              fill = 'blue', alpha = 0.3, size = 1.0) +
+  xlab('View Yes/No') +
+  ylab('Price') +
+  ggtitle('House With View Special Feature')
+
+# Houses with waterfront Yes or No
+ggplot(house.price, aes(waterfront_yes_no, price)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75),
+              fill = 'blue', alpha = 0.3, size = 1.0) +
+  xlab('Waterfront Yes/No') +
+  ylab('Price') +
+  ggtitle('House With Waterfront Special Feature')
+```
+
+# Hypothesis Testing
+It is common knowledge that the basic features examined previously such as square footage of living space, lot, basement, as well as number of bedrooms and bathrooms in addition to the geographical location of the house influence the house price. As previously mentioned, special features such as having a view and/or the house being in a waterfront location will have an influence in the price. The Hypothesis tests performed below are:
+
+1.	Hypothesis Test Series 1 - Waterfront Houses Yes/No Influence the Price
+2.	Hypothesis Test Series 2 - Houses with a View Yes/No Influence the Price
+3.	Hypothesis Test Series 3 - Waterfront Properties Yes/No with a View Yes/No Influence the Price
+
+**Note:** I acknowledge that the sub-dataset used for these tests include 163 houses that have both special features, a view, and waterfront lot. This is not considered material and it is appropriate to proceed with the tests.
+
+## Hypothesis Test Series 1 - Waterfront Houses Yes/No Influence the Price
+
+```{r Hypothesis Test Series 1 - Waterfront HousesYes/No Influence The Price}
+# Creating two sub-data sets for testing
+# Data set 1 is all waterfront properties
+df_waterfront_yes <- house.price %>% filter(waterfront_yes_no == "yes")
+df_waterfront_yes %>% glimpse()
+
+# Data set 2 is all homes not in waterfront properties
+df_waterfront_no <- house.price %>% filter(waterfront_yes_no == "no")
+df_waterfront_no %>% glimpse()
+
+# Calculating Mean and SD for waterfront houses
+df_waterfront_yes_mean <- df_waterfront_yes$price %>% mean() %>% round(1)
+df_waterfront_yes_sd <- df_waterfront_yes$price %>% sd() %>% round(1)
+
+# Calculating Mean and SD for NO waterfront houses
+df_waterfront_no_mean <- df_waterfront_no$price %>% mean() %>% round(1)
+df_waterfront_no_sd <- df_waterfront_no$price %>% sd() %>% round(1)
+
+# Print results of mean and SD
+cat(str_c("\nWaterfront Properties: mean = ", df_waterfront_yes_mean," and stadard deviation = ", df_waterfront_yes_sd))
+cat(str_c("\nNot In Waterfront Properties: mean = ", df_waterfront_no_mean," and stadard deviation = ", df_waterfront_no_sd))
+
+# Performing a two sample, one-sided t-test
+# Hypothesis Test: waterfront houses are priced lower than houses NOT in waterfront properties
+# NULL Hypothesis: waterfront houses are priced higher than houses NOT in waterfront properties
+# Confidence Level: 95%
+cat("\n")
+cat("\n**** Waterfront !< Not in Waterfront ****")
+t.test(df_waterfront_yes$price, df_waterfront_no$price, conf.level = 0.95, alternative = "less")
+
+# Performing a two sample, two-sided t-test
+# Hypothesis Test: waterfront houses and houses NOT in waterfront properties are priced similarly
+# NULL Hypothesis: waterfront houses and houses NOT in waterfront properties are NOT priced similarly
+# Confidence Level: 95%
+cat("\n**** Waterfront != Not in Waterfront ****")
+t.test(df_waterfront_yes$price, df_waterfront_no$price, conf.level = 0.95, alternative = "two.sided")
+
+# Performing a two sample, one-sided t-test
+# Hypothesis Test: waterfront houses are priced higher than houses NOT in waterfront properties
+# NULL Hypothesis: waterfront houses are priced lower than houses NOT in waterfront properties
+cat("\n**** Waterfront !> Not in Waterfront ****")
+t.test(df_waterfront_yes$price, df_waterfront_no$price, conf.level = 0.95, alternative = "greater")
+
+# Visualization
+ggplot(house.price, aes(x=waterfront_yes_no, y=price)) +
+  stat_boxplot(geom = "errorbar", width = 0.5) +
+  geom_boxplot() + 
+  ggtitle("Chart 2.1: Visualization of House Price in relation to Waterfront as Special Feature") + 
+  xlab ("Special Feature, Waterfront") +
+  ylab("House Price")
+```
+
+Summary of Hypothesis Test Series 1:
+
+1. Waterfront houses = 163 rows 
+2. Houses NOT in waterfront = 21,450 
+3. t-value = 12.882, and df = 162.23 
+4. Mean of waterfront houses = 1,662,524 with Standard Deviation = 1,120,388 
+5. Mean of houses NOT in waterfront = 531,653 with Standard Deviation = 341,840 
+6. The mean variance between the waterfront versus not in waterfront properties is significant and supports the hypothesis that waterfront properties appear to be priced higher than NOT in waterfront properties. 
+7. Based on p-value: 
+7.a. One sided test of waterfront house price < NOT in waterfront house (p-value = 1): The t.test results cannot statistically prove that houses located in waterfront properties are priced lower than houses NOT located in waterfront properties. Thus, accepting the NULL hypothesis that houses in waterfront properties are priced higher than houses NOT in waterfront properties.
+7.b. Two-sided test of Waterfront house price = NOT in waterfront house (p-value <2.2e-16): The t.test results cannot statistically reject the hypothesis that the houses located in waterfront properties are priced higher than houses NOT located in waterfront properties. Thus, rejecting the NULL hypothesis that these houses are priced similarly.
+7. c. One sided test of waterfront house price > NOT in waterfront house (p-value <2.2e-16): The t.test value cannot statistically reject that waterfront houses are priced higher than houses NOT in waterfront properties. Thus, accepting the NULL hypothesis that houses NOT in waterfront properties are priced lower than houses in waterfront properties.
+
+## Hypothesis Test Series 2 - Houses with a View Yes/No Influence the Price
+
+```{r Hypothesis Test Series 2 - Properties with a View Yes/No Influence The Price}
+# Creating two sub-data sets for testing
+# Data set 1 is all properties with a view
+df_view_yes <- house.price %>% filter(view_yes_no == "yes")
+df_view_yes %>% glimpse()
+
+# Data set 2 is all homes without a view
+df_view_no <- house.price %>% filter(view_yes_no == "no")
+df_view_no %>% glimpse()
+
+# Calculating Mean and SD for houses with a view
+df_view_yes_mean <- df_view_yes$price %>% mean() %>% round(1)
+df_view_yes_sd <- df_view_yes$price %>% sd() %>% round(1)
+
+# Calculating Mean and SD for houses without a view
+df_view_no_mean <- df_view_no$price %>% mean() %>% round(1)
+df_view_no_sd <- df_view_no$price %>% sd() %>% round(1)
+
+# Print results of mean and SD
+cat(str_c("\n Properties with a View: mean = ", df_view_yes_mean," and stadard deviation = ", df_view_yes_sd))
+cat(str_c("\n Properties Without A View: mean = ", df_view_no_mean," and stadard deviation = ", df_view_no_sd))
+
+# Performing a two sample, one-sided t-test
+# Hypothesis Test: houses with a view are priced lower than houses without a view
+# NULL Hypothesis: houses with a view are priced higher than houses without a view
+# Confidence Level: 95%
+cat("\n")
+cat("\n**** View !< No View ****")
+t.test(df_view_yes$price, df_view_no$price, conf.level = 0.95, alternative = "less")
+
+# Performing a two sample, two-sided t-test
+# Hypothesis Test: houses with a view and houses without a view are priced similarly
+# NULL Hypothesis: houses with a view and houses without a view are NOT priced similarly
+# Confidence Level: 95%
+cat("\n**** View != No View ****")
+t.test(df_view_yes$price, df_view_no$price, conf.level = 0.95, alternative = "two.sided")
+
+# Performing a two sample, one-sided t-test
+# Hypothesis Test: houses with a view are priced higher than houses without a view
+# NULL Hypothesis: houses with a view are priced lower than houses without a view
+cat("\n**** View !> No View ****")
+t.test(df_view_yes$price, df_view_no$price, conf.level = 0.95, alternative = "greater")
+
+# Visualization 
+ggplot(house.price, aes(x=view_yes_no, y=price)) +
+  stat_boxplot(geom = "errorbar", width = 0.5) +
+  geom_boxplot() + 
+  ggtitle("Chart 2.2: Visualization of House Price in relation to View as Special Feature") + 
+  xlab ("Special Feature, View") +
+  ylab("House Price")
+```
+
+Summary of Hypothesis Test Series 2 - Houses with a View Yes/No Influence The Price: 
+1. Houses with a view = 2,124 rows 
+2. Houses without a view = 19,489 
+3. t-value = 30.525, df = 2210.8 
+4. Mean of houses with a view = 939,859 and Standard Deviation = 662,440 
+5. Mean of houses without a view = 496,624 and Standard Deviation = 287,317 
+6. The mean variance between houses with a view versus without a view is significant and supports the hypothesis that houses with a view appear to be priced higher than houses without a view. 
+7. Based on p-value: 
+7.a. One sided test of prices of houses with a view < houses without a view (p-value = 1): The t.test results cannot statistically prove that houses with a view are priced lower than houses without a view. Thus, accepting the NULL hypothesis that houses with a view are priced higher than houses without a view.
+7.b. Two-sided test of prices of houses with a view = houses without a view (p-value <2.2e-16): The t.test results cannot statistically reject the hypothesis that the houses with a view are priced higher than houses without a view. Thus, rejecting the NULL hypothesis that these houses are priced similarly.
+7.c. One sided test of prices of houses with a view > houses without a view (p-value <2.2e-16): The t.test results cannot statistically reject that houses with a view are priced higher than houses without a view. Thus, accepting the NULL hypothesis that houses without a view are priced lower than houses with a view.
+
+## Hypothesis Test Series 3 - Waterfront Properties Yes/No with a View Yes/No Influence the Price
+
+```{r Hypothesis Test Series 3 - Waterfront Houses Yes/No Versus Houses With a View Yes/No Influence The Price}
+# Using existing sub-data sets for testing
+df_waterfront_yes %>% glimpse()
+df_view_yes %>% glimpse()
+
+# Houses with both special features.
+house.price.waterfrontandview <- df_waterfront_yes %>% filter(view_yes_no == "yes")
+house.price.waterfrontandview
+
+# Print results of mean and SD
+cat(str_c("\n Waterfront Properties: mean = ", df_waterfront_yes_mean," and stadard deviation = ", df_waterfront_yes_sd))
+cat(str_c("\n Properties with a View: mean = ", df_view_yes_mean," and stadard deviation = ", df_view_yes_sd))
+
+# Performing a two sample, one-sided t-test
+# Hypothesis Test: houses with a view are priced lower than waterfront houses
+# NULL Hypothesis: Houses without a view are priced lower than waterfront houses
+# Confidence Level: 95%
+cat("\n")
+cat("\n **** Waterfront Houses !< Houses With A View ****")
+t.test(df_waterfront_yes$price, df_view_yes$price, conf.level = 0.95, alternative = "less")
+
+# Performing a two sample, two-sided t-test
+# Hypothesis Test: houses with a view and waterfront houses are priced similarly
+# NULL Hypothesis: houses with a view and waterfront houses are NOT priced similarly
+# Confidence Level: 95%
+cat("\n**** Waterfront Houses != Houses With A View ****")
+t.test(df_waterfront_yes$price, df_view_yes$price, conf.level = 0.95, alternative = "two.sided")
+
+# Performing a two sample, one-sided t-test
+# Hypothesis Test: houses with a view are priced higher than waterfront houses
+# NULL Hypothesis: Houses with a view are priced lower than waterfront houses
+cat("\n**** Houses With A View !> Waterfront Houses ****")
+t.test(df_waterfront_yes$price, df_view_yes$price, conf.level = 0.95, alternative = "greater")
+```
+
+Summary of Hypothesis Test Series 3 - Waterfront Houses Yes/No Versus Houses With a View Yes/No Influence The Price: 
+
+1. Waterfront houses = 163 rows 
+2. Houses with a view = 2,124 rows (includes the 163 waterfront houses. Not material) 
+3. t-value = 8.1267, df = 170.8 
+4. Mean of waterfront houses = 1,662,524 and Standard Deviation = 1,120,388 
+5. Mean of houses with a view = 939,859 and Standard Deviation = 662,440 
+6. The mean variance between waterfront houses versus houses with a view is significant which supports the hypothesis that waterfront houses appear to be priced higher than houses with a view. 
+7. based on the p-value: 
+7.a. One sided test of prices of waterfront houses < houses with a view (p-value = 1): The t.test results cannot statistically prove that waterfront houses are priced lower than houses with a view. Thus, accepting the NULL hypothesis that waterfront houses are priced higher than houses with a view.
+7.b. Two sided test of prices of waterfront houses = houses with a view (p-value = 8.544e-14): The t.test results cannot statistically reject the hypothesis that waterfront houses are priced higher than houses with a view. Thus, rejecting the NULL hypothesis that waterfront houses and houses with a view are priced          similarly.
+7.c. One sided test of prices of waterfront houses > houses with a view (p-value = 4.272e-14): The t.test results cannot statistically reject that waterfront houses are priced higher than houses with a view. Thus, accepting the NULL hypothesis that houses with a view are priced lower than waterfront houses.
+
+**The conclusions from the 3 tests performed below are:**
+The data suggests that a house with a waterfront special feature will have a greater price advantage over a house with a view. Although, having a view as special feature offers good price advantage.
+
+# Split into train / test sets
+To test the model in an unbiased manner and avoid **unrealistically optimistic** results as a result of the machine learning the data effectively and missleading the results in a way that the model produces excellent test results when presented with similar training data. To avoid this issue I have split our data set into two **mutually exclusive** subsets named **training data set** and the **test data set**. 
+
+```{r Data Split: Training Data Set and Testing Data Set}
+# Count Rows in the data set
+count_rows = nrow(house.price)
+count_rows
+
+# Setting seed
+set.seed(1222) 
+
+# 70% of the data for training
+train_id = sample(1:count_rows, 0.7*count_rows)
+#train_id
+
+# 30% remaining of the data for testing
+train_data = house.price[train_id,]
+test_data = house.price[-train_id,]
+
+# Display row counts of train data and test data
+print(str_c("house.price.train rows: ", nrow(train_data)))
+print(str_c("house.price.test rows: ", nrow(test_data)))
+
+# Compare train data and test data
+nrow(test_data) + nrow(train_data) == nrow(house.price)
+
+```
+
+Summary of the Data Split:
+Training Data Set contains 15,219 rows, while the Testing Data Set contains 6,848 rows out of the 21,613 and the data is ready to train the **generalized linear model (glm)**. 
+
+# Train and test models
+## Model 1
+It is challenging to build a prediction model to estimate the house prices (label) based on one or few features as the price is driven by many factors. As mentioned at the beginning of this analysis the house price data available presents features that I have segment into Geographical, Basic, Age/Condition, and Special Features to which are all applied in the Linear Regression Model with multiple variables shown below.
+
+## Linear Regression Model 1.1
+Multiple Variables 
+Data set: house. price 
+Label: Price
+ Independent Variables: House Basic Features + Special Features + Geographical Feature + Age/Condition Feature Features removed due to their significant codes are sqft. basement, and year renovated
+
+```{r Linear Regression Prediction Model 1.1}
+# Linear Regression Model 1.1
+# Multiple Variables
+# Data set: house.price
+# Label: Price
+# Independent Variables: House Basic Features + Special Features + Geographical Feature + Age/Condition Feature
+# Features removed due to their significant codes are sqft.basement, and year renovated
+# Understand the relation between house price and its features
+
+# Create linear model
+# Price ~ Geographical Age/Condition, Basic, and Special Features 
+house.price.regressionmod1.1 = lm(price ~ zipcode + bedrooms + bathrooms + sqft.living + sqft.lot + floors + grade + yr.built + waterfront_yes_no + view_yes_no, data = house.price)
+summary (house.price.regressionmod1.1)
+cat('The coefficient confidence intervals')
+confint (house.price.regressionmod1.1)
+
+# house.price.regressionmod1.1 coeficient
+house.price.regressionmod1.1$coefficients
+
+# Predict
+house.price$prediction = predict(house.price.regressionmod1.1, newdata = house.price)
+
+# Computed error
+error = sqrt(sum((house.price$price - house.price$prediction)^2)/nrow(house.price))
+cat('Computed Error: \n')
+error
+
+
+```
+
+Summary of results Linear Regression Model 1.1:
+
+1. The model appears to be over-fit, as the zipcode coefficient does not appear to be significant. However, it is important to retain the geographical feature for this test as the location of the house plays a role in the house price.
+2. The residual standard error appears reasonably modest, given the range of the label
+3. The adjusted R-squared is reasonable. Although, the coefficients predict 65% of the behavior of the house price. However, I’d like to see it closer to 1.0. Even by removing the Zip Code the number would increase materially.
+4. Error is 217,335
+
+## Linear Regression Model 1.2
+**Note: The only difference with the previous model is that 1.2 uses training data = 70% of data set**
+
+Multiple Variables 
+Data set: Training Data 
+Label: Price 
+Independent Variables: House Basic Features + Special Features + Geographical Feature + Age/Condition Feature Features removed due to their significant codes are sqft. basement, and year renovated
+
+```{r Linear Regression Prediction Model 1.2}
+# Linear Regression Model 1.2
+# Multiple Variables
+# Data set: train data which is 70% of the house.price data set chosen randomly based on seed
+# Label: Price
+# Independent Variables: House Basic Features + Special Features + Geographical Feature + Age/Condition Feature
+# Features removed due to their significant codes are sqft.basement, and year renovated
+# Understand the relation between house price and its features
+
+# Create linear model
+# Price ~ Geographical Age/Condition, Basic, and Special Features 
+house.price.regressionmod1.2 = lm(price ~ zipcode + bedrooms + bathrooms + sqft.living + sqft.lot + floors + grade + yr.built + waterfront_yes_no + view_yes_no, data = train_data)
+summary (house.price.regressionmod1.2)
+cat('The coefficient confidence intervals')
+confint (house.price.regressionmod1.2)
+
+test_data$prediction = predict(house.price.regressionmod1.2, newdata = test_data)
+test_data
+
+# Computed error
+error = sqrt(sum((test_data$price - test_data$prediction)^2)/nrow(test_data))
+cat('Computed Error: \n')
+error
+```
+
+Summary of results
+Linear Regression Model 1.2:
+1. Overall this model is very similar to 1.1 which uses the complete data set. 
+2. The model appears to be **over-fit**, as the zipcode coefficient does not appear to be significant. However, it is important to retain the geographical feature for this test as the location of the house plays a role in the house price. 
+3. The residual standard error appears reasonably modest, given the range of the label
+4. The adjusted R-squared is reasonable but did not change much from model 1.1 as the coefficients predict 64.35% of the behavior of the house price. I would have liked to see a higher number. Even by removing the Zip Code the number would increase materially. 
+5. Error is 217,396 which unchanged (although slightly higher) from model 1.1 which shows consistency. 
+6. The model appears modest.
+
+## Classificaiton Model 2.1
+The business question is can we predict if a house has a view? Yes/No, using the existing data and Generalized Linear Model.
+
+```{r Classification Prediction Model 2}
+# Classification Model 2.1
+# Data set: House.price
+# Label: view_yes_no
+# Independent Variables: House Basic Features + Special Features + Geographical Feature + Age/Condition Feature
+# Features removed due to their significant codes are Waterfront_yes_no, sqft.basement, and year renovated
+
+# Create the Model
+housewithview.classificationmod2.1 = glm(view_yes_no ~ zipcode + bedrooms + bathrooms + sqft.living + floors + grade + yr.built -1, data = train_data, family = binomial)
+summary (housewithview.classificationmod2.1)
+
+# Predict
+train_data$prediction = predict(housewithview.classificationmod2.1)
+
+# Visualize the data
+boxplot(house.price$prediction ~ house.price$view_yes_no )
+
+# Confusion matrix
+test_data$prediction = predict(housewithview.classificationmod2.1, newdata = test_data)
+test_data$ampred = ifelse(test_data$prediction > 0.7, 'yes', 'no')
+caret::confusionMatrix(as.factor(test_data$ampred), as.factor(test_data$view_yes_no))
+```
+
+Summary of the results of Linear Regression Model 2.0:
+
+The confusion matrix using  prediction > 70% produced:
+1. correctly predicted 5,823 True Negatives
+2. Incorrectly predicted 607 False Negatives
+3. Incorrectly predicted 23 False Positives
+4. Correctly predicted 31 True Positives
+5. Accuracy of 90.3%
+
+# Model Performance Comparison
+
+Summary of Results of the Model Performance Comparison For most cases the price values are reasonably comparable to the predicted price. Additionally, there appear to be minimal variances in predicted prices based on regression models 1.1 and 1.2. The significance of the variances may be negligible.
+
+In conclusion, both Linear Regression Models 1.1 and 1.2 based on Geographical, Basic, Special Features as well as Age/Condition are remarkably similar. To test the model prediction, I used a random set of features such as: 4 bedrooms, 3 bathrooms, 2100 sqft. living space, floor grade of 2 and built grade 6, built in 2000 with a view but no waterfront located in zip code are 98103 which is in the Freemont neighborhood of Seattle. Linear Regression Models 1.1 predicted a house price of $341,727 whereas model 1.2 predicted a house price of $338,087.
+
+```{r Model Performance Comparison of house.price.regressionmod1.1}
+
+# Adding predicted scores and residual values from house.price.regressionmod1.1 to the dataframe
+house.price.comp1.1 = house.price %>% mutate(score = predict (house.price.regressionmod1.1, data = house.price)) %>% mutate(resids = price - score,
+                                      predicted.price.regressionmod1.1 = exp(score)) 
+house.price.comp1.1[1:10, 3:22]
+glimpse(house.price.comp1.1)
+
+# Predict based on the linear model created, house.price.regressionmod1.1
+print("Predicting house prices based on features such as: zip code 98103, 4 bedrooms, 3 bathrooms, 2100 sqft.living space, 2 floors grade, 6 built grade, built in 2000, no waterfront, with a view")
+data_new = data.frame(zipcode = 98103, bedrooms = 4, bathrooms = 3, sqft.living = 2100, sqft.lot = 5000, floors =2, grade =6, yr.built =2000, waterfront_yes_no = 'no', view_yes_no = 'yes')
+
+house.price.regressionmod1.1 %>% predict(newdata = data_new)
+
+# Predict based on the linear model created, house.price.regressionmod1.2
+print("Predicting house prices based on features such as: zip code 98103, 4 bedrooms, 3 bathrooms, 2100 sqft.living space, 2 floors grade, 6 built grade, built in 2000, no waterfront, with a view")
+data_new = data.frame(zipcode = 98103, bedrooms = 4, bathrooms = 3, sqft.living = 2100, sqft.lot = 5000, floors =2, grade =6, yr.built =2000, waterfront_yes_no = 'no', view_yes_no = 'yes')
+house.price.regressionmod1.2 %>% predict(newdata = data_new)
+```
